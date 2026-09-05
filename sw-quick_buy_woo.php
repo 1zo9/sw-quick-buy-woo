@@ -1,271 +1,248 @@
-<?php 
+<?php
 /**
- * Plugin Name: SW Quick buy Woo
- * Plugin URI: https://sonweb.net/plugin-gui-thong-bao-don-hang-moi-woocommerce-telegram.html/
- * Description: Mua hàng nhanh Woocommerce
- * Version: 1.0.0
- * Author: SonWeb
- * Author URI: https://sonweb.net
- * Text Domain: sonweb
- * License: GPLv2
+ * Plugin Name: SW Quick Buy Woo Advanced
+ * Description: Plugin Đặt Hàng Nhanh WooCommerce tối ưu Mobile, Biến thể, Coupon, Tỉnh thành VN & Exit-Intent.
+ * Version: 3.0.0
+ * Author: Custom Developer
  */
-if ( ! defined( 'ABSPATH' ) ) {
-	exit;
+
+if (!defined('ABSPATH')) exit;
+
+class SW_Quick_Buy_Woo_Adv {
+    public function __construct() {
+        add_action('wp_enqueue_scripts', array($this, 'enqueue_assets'));
+        add_action('wp_footer', array($this, 'render_popup_modal'));
+        
+        // Shortcode
+        add_shortcode('sw_quick_buy', array($this, 'quick_buy_shortcode'));
+        
+        // Admin Settings
+        add_action('admin_menu', array($this, 'add_admin_menu'));
+        add_action('admin_init', array($this, 'register_settings'));
+        
+        // AJAX Order & Coupon
+        add_action('wp_ajax_sw_qb_submit_order', array($this, 'handle_quick_order'));
+        add_action('wp_ajax_nopriv_sw_qb_submit_order', array($this, 'handle_quick_order'));
+        add_action('wp_ajax_sw_qb_apply_coupon', array($this, 'handle_apply_coupon'));
+        add_action('wp_ajax_nopriv_sw_qb_apply_coupon', array($this, 'handle_apply_coupon'));
+        add_action('wp_ajax_sw_qb_save_lead', array($this, 'handle_save_lead'));
+        add_action('wp_ajax_nopriv_sw_qb_save_lead', array($this, 'handle_save_lead'));
+    }
+
+    public function add_admin_menu() {
+        add_menu_page('SW Quick Buy', 'SW Quick Buy', 'manage_options', 'sw-quick-buy-settings', array($this, 'settings_page_html'), 'dashicons-cart', 56);
+    }
+
+    public function register_settings() {
+        register_setting('sw_qb_group', 'sw_qb_btn_text');
+        register_setting('sw_qb_group', 'sw_qb_main_color');
+        register_setting('sw_qb_group', 'sw_qb_enable_exit_intent');
+        register_setting('sw_qb_group', 'sw_qb_exit_msg');
+    }
+
+    public function settings_page_html() {
+        ?>
+        <div class="wrap">
+            <h1>Cấu Hình SW Quick Buy Woo</h1>
+            <form method="post" action="options.php">
+                <?php
+                settings_fields('sw_qb_group');
+                $btn_text = get_option('sw_qb_btn_text', 'MUA NGAY');
+                $main_color = get_option('sw_qb_main_color', '#c59841');
+                $exit_intent = get_option('sw_qb_enable_exit_intent', '1');
+                $exit_msg = get_option('sw_qb_exit_msg', 'Ưu đãi đặc biệt sắp hết hạn! Bạn có chắc muốn thoát?');
+                ?>
+                <table class="form-table">
+                    <tr>
+                        <th>Chữ hiển thị trên nút:</th>
+                        <td><input type="text" name="sw_qb_btn_text" value="<?php echo esc_attr($btn_text); ?>" class="regular-text"></td>
+                    </tr>
+                    <tr>
+                        <th>Màu chủ đạo:</th>
+                        <td><input type="color" name="sw_qb_main_color" value="<?php echo esc_attr($main_color); ?>"></td>
+                    </tr>
+                    <tr>
+                        <th>Bật bẫy giữ chân (Exit-Intent):</th>
+                        <td><input type="checkbox" name="sw_qb_enable_exit_intent" value="1" <?php checked('1', $exit_intent); ?>></td>
+                    </tr>
+                    <tr>
+                        <th>Cảnh báo khi đóng Popup:</th>
+                        <td><input type="text" name="sw_qb_exit_msg" value="<?php echo esc_attr($exit_msg); ?>" class="regular-text"></td>
+                    </tr>
+                </table>
+                <?php submit_button('Lưu cấu hình'); ?>
+            </form>
+        </div>
+        <?php
+    }
+
+    public function enqueue_assets() {
+        wp_enqueue_style('sw-qb-style', plugin_dir_url(__FILE__) . 'assets/style.css', array(), '3.0.0');
+        $main_color = get_option('sw_qb_main_color', '#c59841');
+        wp_add_inline_style('sw-qb-style', ".sw-qb-header, .sw-qb-submit-btn { background: {$main_color} !important; }");
+
+        wp_enqueue_script('sw-qb-script', plugin_dir_url(__FILE__) . 'assets/script.js', array('jquery'), '3.0.0', true);
+        wp_localize_script('sw-qb-script', 'sw_qb_params', array(
+            'ajax_url' => admin_url('admin-ajax.php'),
+            'exit_intent' => get_option('sw_qb_enable_exit_intent', '1'),
+            'exit_msg' => get_option('sw_qb_exit_msg', 'Ưu đãi đặc biệt sắp hết hạn! Bạn có chắc muốn thoát?')
+        ));
+    }
+
+    public function quick_buy_shortcode($atts) {
+        $atts = shortcode_atts(array('id' => 0), $atts);
+        $product_id = $atts['id'] ? $atts['id'] : get_the_ID();
+        $product = wc_get_product($product_id);
+        if (!$product) return '';
+
+        $btn_text = get_option('sw_qb_btn_text', 'MUA NGAY');
+        return sprintf(
+            '<button type="button" class="sw-quick-buy-btn" data-id="%s" data-type="%s" data-title="%s" data-price="%s" data-raw-price="%s" data-image="%s">%s</button>',
+            $product->get_id(),
+            $product->get_type(),
+            esc_attr($product->get_name()),
+            esc_attr($product->get_price_html()),
+            $product->get_price(),
+            esc_url(wp_get_attachment_image_url($product->get_image_id(), 'medium')),
+            esc_html($btn_text)
+        );
+    }
+
+    public function render_popup_modal() {
+        $states = WC()->countries->get_states('VN');
+        ?>
+        <div id="swQuickBuyModal" class="sw-qb-overlay">
+            <div class="sw-qb-container">
+                <div class="sw-qb-drag-bar"><span class="drag-handle"></span></div>
+                <div class="sw-qb-header">
+                    <span id="swQbHeaderTitle" class="sw-qb-title">ĐẶT MUA SẢN PHẨM</span>
+                    <span class="sw-qb-close">&times;</span>
+                </div>
+                <div class="sw-qb-body">
+                    <div class="sw-qb-prod-col">
+                        <div class="sw-qb-prod-summary">
+                            <img id="swQbImg" src="" alt="">
+                            <div>
+                                <h4 id="swQbTitle"></h4>
+                                <div id="swQbPrice" class="sw-qb-price"></div>
+                            </div>
+                        </div>
+                        <div class="sw-qb-qty-box">
+                            <label>Số lượng:</label>
+                            <input type="number" id="swQbQty" value="1" min="1">
+                        </div>
+                    </div>
+                    <form id="swQbForm" class="sw-qb-form-col">
+                        <div class="sw-qb-gender">
+                            <label><input type="radio" name="gender" value="Anh" checked> Anh</label>
+                            <label><input type="radio" name="gender" value="Chị"> Chị</label>
+                        </div>
+                        <div class="sw-qb-row">
+                            <input type="text" name="name" id="sw_name" placeholder="Họ và tên *" required>
+                            <input type="tel" name="phone" id="sw_phone" placeholder="Số điện thoại *" required>
+                        </div>
+                        <div class="sw-qb-row">
+                            <input type="email" name="email" id="sw_email" placeholder="Địa chỉ email">
+                            <?php if (!empty($states)) : ?>
+                                <select name="state" id="sw_state">
+                                    <option value="">-- Chọn Tỉnh / Thành --</option>
+                                    <?php foreach ($states as $code => $name) : ?>
+                                        <option value="<?php echo esc_attr($code); ?>"><?php echo esc_html($name); ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            <?php endif; ?>
+                        </div>
+                        <textarea name="address" id="sw_address" placeholder="Địa chỉ nhận hàng (Không bắt buộc)" rows="2"></textarea>
+                        <textarea name="note" id="sw_note" placeholder="Ghi chú đơn hàng" rows="2"></textarea>
+                        
+                        <div class="sw-qb-coupon-box">
+                            <input type="text" id="sw_coupon_code" placeholder="Mã giảm giá">
+                            <button type="button" id="swApplyCouponBtn">Áp dụng</button>
+                        </div>
+                        <div id="swCouponMsg"></div>
+
+                        <div class="sw-qb-total-box">
+                            Tổng tiền: <span id="swQbTotal">0 đ</span>
+                        </div>
+
+                        <input type="hidden" name="product_id" id="swQbProductId">
+                        <input type="hidden" name="variation_id" id="swQbVariationId">
+                        <button type="submit" class="sw-qb-submit-btn" id="swQbSubmit">ĐẶT HÀNG NGAY</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        <?php
+    }
+
+    public function handle_apply_coupon() {
+        $code = sanitize_text_field($_POST['coupon']);
+        if (!$code) wp_send_json_error('Vui lòng nhập mã.');
+        
+        $coupon = new WC_Coupon($code);
+        if (!$coupon->is_valid()) {
+            wp_send_json_error('Mã giảm giá không hợp lệ hoặc đã hết hạn.');
+        }
+        
+        wp_send_json_success(array(
+            'discount' => $coupon->get_amount(),
+            'type' => $coupon->get_discount_type(),
+            'msg' => 'Áp dụng mã giảm giá thành công!'
+        ));
+    }
+
+    public function handle_quick_order() {
+        $product_id = intval($_POST['product_id']);
+        $var_id     = intval($_POST['variation_id']);
+        $qty        = max(1, intval($_POST['quantity']));
+        $name       = sanitize_text_field($_POST['name']);
+        $phone      = sanitize_text_field($_POST['phone']);
+        $email      = sanitize_email($_POST['email']);
+        $state      = sanitize_text_field($_POST['state']);
+        $address    = sanitize_textarea_field($_POST['address']);
+        $note       = sanitize_textarea_field($_POST['note']);
+        $gender     = sanitize_text_field($_POST['gender']);
+        $coupon     = sanitize_text_field($_POST['coupon']);
+
+        if (!$product_id || !$name || !$phone) {
+            wp_send_json_error('Vui lòng điền các thông tin bắt buộc.');
+        }
+
+        $order = wc_create_order();
+        $target_id = $var_id ? $var_id : $product_id;
+        $order->add_product(wc_get_product($target_id), $qty);
+
+        if ($coupon) $order->apply_coupon($coupon);
+
+        $address_data = array(
+            'first_name' => $gender . ' ' . $name,
+            'phone'      => $phone,
+            'email'      => $email,
+            'state'      => $state,
+            'country'    => 'VN',
+            'address_1'  => $address ? $address : 'N/A',
+        );
+
+        $order->set_address($address_data, 'billing');
+        $order->set_address($address_data, 'shipping');
+        if ($note) $order->set_customer_note($note);
+
+        $order->calculate_totals();
+        $order->update_status('processing', 'Đơn hàng SW Quick Buy Woo.', true);
+
+        wp_send_json_success('Đặt hàng thành công! Chúng tôi sẽ liên hệ sớm nhất.');
+    }
+
+    public function handle_save_lead() {
+        $phone = sanitize_text_field($_POST['phone']);
+        $name = sanitize_text_field($_POST['name']);
+        $prod_id = intval($_POST['product_id']);
+
+        if ($phone && $prod_id) {
+            set_transient('sw_qb_lead_' . $phone, array('name' => $name, 'phone' => $phone, 'product_id' => $prod_id), DAY_IN_SECONDS);
+        }
+        wp_send_json_success();
+    }
 }
 
-if ( !class_exists('swqbwoSWQuickBuyWoo') ) {
-	class swqbwoSWQuickBuyWoo {
-		public $plugin;
-		private $swqbw_options_setting_woo = array( 
-			'ck_turnon'	=>'1',
-			'txtBuy1'	=> 'Mua ngay',
-			'txtBuy2'	=> 'Gọi điện xác nhận và giao hàng tận nơi',
-			'popup_mess' => 'Bạn vui lòng nhập đúng số điện thoại để chúng tôi sẽ gọi xác nhận đơn hàng trước khi giao hàng. Xin cảm ơn!',
-            'popup_sucess' => '<div class="popup-message success" style="color:#333;"><p class="clearfix" style="font-size:22px;color: #00c700;text-align:center">Đặt hàng thành công!</p><p class="clearfix" style="color: #00c700;padding: 10px 0;">Mã đơn hàng <span style="color: #333;font-weight: bold">#%%order_id%%</span></p><p class="clearfix">SonWeb SHOP sẽ liên hệ với bạn trong 12h tới. Cám ơn bạn đã cho chúng tôi cơ hội được phục vụ.<br><strong>Hotline:</strong> 0932.644.101</p><p class="clearfix"><strong>Ghi chú: </strong>Đơn hàng chỉ có hiệu lực trong vòng 48h</p><div></div><div></div></div>',
-            'popup_error' => 'Đặt hàng thất bại. Vui lòng đặt hàng lại. Xin cảm ơn!',
-		);
-
-		function __construct() {
-			$this->swqbw_define_constants();
-			$this->plugin = plugin_basename(__FILE__);
-			$this->swqbw_options_setting_woo = $this->swqbw_get_options();
-		}
-
-		function swqbw_define_constants() {
-
-			if ( !defined('SWQBW_PLUGIN_PATH' ) ) {
-				define('SWQBW_PLUGIN_PATH', plugin_dir_path(__FILE__));
-			}
-			if ( !defined('SWQBW_PLUGIN_URL' ) ) {
-				define('SWQBW_PLUGIN_URL', plugin_dir_url(__FILE__));
-			}
-		}
-
-		function register() {
-			// add shortcode button quick buy
-			add_shortcode('sw_quickbuy', array($this, 'sw_add_button_quick_buy'));
-			// hook woocommerce_single_product_summary button cart
-			add_action('woocommerce_single_product_summary', array($this, 'display_button_quick_buy'), 35);
-			//add_action('wp_enqueue_scripts',array($this,'swqbw_enqueue'),10 );
-			add_action( 'admin_menu', array( $this, 'add_admin_pages' ) );
-			// enqueue 
-			include_once(SWQBW_PLUGIN_PATH .'/includes/swqbw-enqueue.php');
-			//include_once(SWQBW_PLUGIN_PATH .'/includes/process.php');
-			// register option
-			add_action('admin_init',array($this, 'swqbwoo_register_settings') );
-			// option page 
-			//include_once(SWQBW_PLUGIN_PATH .'/includes/option-page.php');
-			add_action( 'admin_notices', array( $this, 'admin_notices_sw' ) );
-			// hook display popup form quick buy
-			add_action('woocommerce_after_single_product', array($this, 'swqbw_quick_buy_popup_content'));
-			// add to cart use popup 
-			add_action('sw_prod_variable','woocommerce_template_single_add_to_cart');
-
-			add_action( 'wp_ajax_swqbwprocess', array($this, 'swqbw_process_order_init') );
-			add_action( 'wp_ajax_nopriv_swqbwprocess',array($this, 'swqbw_process_order_init') );
-		}
-
-		function admin_notices_sw() {
-			if (isset($_GET['settings-updated'])) :
-				?>
-					<div class="notice notice-success is-dismissible update_swqbw">
-						<p><?php esc_html_e( 'Cập nhật cài đặt thành công', 'sonweb' ); ?></p>
-					</div>
-				<?php
-			endif;
-		}
-		// create content popup display 
-		function swqbw_quick_buy_popup_content() {
-			global $product;
-			?>
-				<div class="sw-popup-quickbuy" data-popup="popup-quickbuy">
-					<div class="sw-popup-inner">
-						<div class="sw-popup-title">
-                            <span><?php echo get_the_title();?></span>
-                            <button type="button" class="sw-popup-close"></button>
-                        </div><!--end popup-title-->
-						<div class="sw-popup-content">
-							<div class="sw-popup-content-left">
-                                <div class="sw-popup-prod">
-                                    <?php if(has_post_thumbnail()):?>
-                                        <div class="sw-popup-img"><?php the_post_thumbnail('shop_thumbnail');?></div>
-                                    <?php endif;?>
-                                    <div class="sw-popup-info">
-                                        <span class="sw_title"><?php the_title();?></span>
-                                        <?php if($product->get_type() == 'simple'):?>
-											<span class="sw_price"><?php echo $product->get_price_html(); ?></span>
-										<?php endif;?>
-                                    </div>
-                                </div> <!--end prod left-->
-								<div class="sw_prod_variable" data-simpleprice="<?php echo $product->get_price();?>">
-                                    <?php do_action('sw_prod_variable');?>
-                                </div>
-                            </div><!--end left-->
-							<div class="sw-popup-content-right">
-								<form class="sw_cusstom_info" id="sw_cusstom_info" method="post">
-									<div class="popup-customer-info">
-										<div class="popup-customer-info-title">
-											<?php _e('Thông tin người mua','sw-quickbuy')?>
-										</div>
-										<div class="popup-customer-info-group popup-customer-info-radio">
-                                            <label>
-                                                <input type="radio" name="customer-gender" value="1" checked/>
-                                                <span>Anh</span>
-                                            </label>
-                                            <label>
-                                                <input type="radio" name="customer-gender" value="2"/>
-                                                <span>Chị</span>
-                                            </label>
-                                        </div><!--info-radio-->
-										<div class="popup-customer-info-group">
-                                            <div class="popup-customer-info-item-2">
-                                                <input type="text" class="customer-name" name="customer-name" required placeholder="Họ và tên">
-                                            </div>
-                                            <div class="popup-customer-info-item-2">
-                                                <input type="text" class="customer-phone" name="customer-phone" required placeholder="Số điện thoại">
-                                            </div>
-                                        </div><!--info-customer-->
-										<div class="popup-customer-info-group">
-                                            <div class="popup-customer-info-item-1">
-												<input type="email" class="customer-email" name="customer-email" data-required="true" required placeholder="Địa chỉ email">
-                                            </div>
-                                        </div>
-										<div class="popup-customer-info-group">
-                                            <div class="popup-customer-info-item-1">
-                                                <textarea class="customer-address" name="customer-address" placeholder="Địa chỉ nhận hàng (Không bắt buộc)"></textarea>
-                                             </div>
-                                        </div>
-										<div class="popup-customer-info-group">
-                                            <div class="popup-customer-info-item-1">
-                                                <textarea class="order-note" name="order-note" placeholder="Ghi chú đơn hàng (Không bắt buộc)"></textarea>
-                                            </div>
-                                        </div>
-										<div class="popup-customer-info-group">
-                                            <div class="popup-customer-info-item-1 popup_quickbuy_shipping">
-                                                <div class="popup_quickbuy_shipping_title">Tổng:</div>
-                                                <div class="popup_quickbuy_total_calc"></div>
-                                            </div>
-                                        </div>
-										<div class="popup-customer-info-group">
-                                            <div class="popup-customer-info-item-1">
-                                                <button type="button" class="sw-order-btn">Đặt hàng ngay</button>
-                                            </div>
-                                        </div>
-										<div class="popup-customer-info-group">
-                                            <div class="popup-customer-info-item-1">
-                                                <div id="sw_mess" class="sw_quickbuy_mess"></div>
-                                            </div>
-                                        </div>
-									</div>
-									<input type="hidden" name="prod_id" id="prod_id" value="<?php the_ID();?>">
-								</form>
-							</div><!--end right-popup-->
-						</div><!--end popup-content-->
-					</div>
-				</div><!--end popup-->
-			<?php
-		}
-		// load page to menu
-		public function add_admin_pages() {
-			// Then the submenus
-			add_submenu_page(
-				'edit.php?post_type=product', // parent plug
-				'Cài đặt mua nhanh sản phẩm', // Submenu Page Title
-				'Cài đặt mua nhanh', //  Submenu Title
-				'manage_options', // capability
-				'swcustom-woopact', // slug
-				array($this,'swqbwoo_cb_option_page') // callback
-			);
-		
-		}
-
-		function swqbwoo_register_settings() {
-			//register our settings	
-			register_setting( 
-				'swqbw_options_woo', //  Option group
-				'swqbw_setting_woo',//option name
-				'sanitize' // callback
-			);
-		}
-		// callback option page
-		function swqbwoo_cb_option_page() {
-			require_once SWQBW_PLUGIN_PATH . 'includes/admin.php';
-		}
-
-		function swqbw_get_options() {
-			return wp_parse_args(get_option('swqbw_setting_woo'),$this->swqbw_options_setting_woo );
-		}
-
-		function sw_add_button_quick_buy() {
-			//echo 'test';
-			global $product;
-                ob_start();
-				if( $product->is_in_stock()):
-                    ?>
-                    <a href="javascript:void(0);" class="sw_buy_now" id="sw_buy_now">
-                        <strong><?php echo $this->swqbw_options_setting_woo['txtBuy1']?></strong>
-                        <span><?php echo $this->swqbw_options_setting_woo['txtBuy2']?></span>
-                    </a>
-                    <?php
-                endif;
-                return ob_get_clean();
-		}
-
-		function swqbw_process_order_init() {
-			$prod_id = isset($_POST['prod_id']) ? intval($_POST['prod_id']) : '';
-			$prod_check = wc_get_product($prod_id);
-		
-			parse_str($_POST['customer_info'], $customer_info);
-			parse_str($_POST['product_info'], $product_info);
-		
-			$qty = isset($product_info['quantity']) ? (float) $product_info['quantity'] : 1;
-			  // Now we create the order
-			$order = wc_create_order();
-			if(!is_wp_error($order)) {
-				$args  = array();
-				$order->add_product($prod_check, $qty, $args);
-				$order->calculate_totals();
-		
-				$customer_gender = (isset($customer_info['customer-gender']) && $customer_info['customer-gender'] == 1)  ? 'Anh' : 'Chị';
-				$customer_name = isset($customer_info['customer-name']) ? sanitize_text_field($customer_info['customer-name']): '';
-				$customer_email = isset($customer_info['customer-email']) ? sanitize_email($customer_info['customer-email']): '';
-				$customer_phone = isset($customer_info['customer-phone']) ? sanitize_text_field($customer_info['customer-phone']): '';
-				$customer_address = isset($customer_info['customer-address']) ? sanitize_textarea_field($customer_info['customer-address']): '';
-				$customer_note = isset($customer_info['order-note']) ? sanitize_textarea_field($customer_info['order-note']): '';
-		
-				$address = array(
-					'first_name' => $customer_gender,
-					'last_name'  => $customer_name,
-					'email'      => $customer_email,
-					'phone'      => $customer_phone,
-					'address_1'  => $customer_address,
-					'address_2'  => '', 
-					'state'      => '',
-					'country'    => 'VN'
-				);
-		
-				$order->set_address( $address, 'billing' );
-				$order->set_address( $address, 'shipping' );
-				$order->update_status("processing", 'Đơn hàng nhanh', TRUE);
-		
-				$result['content'] = str_replace('%%order_id%%', $order->get_order_number(), $this->swqbw_options_setting_woo['popup_sucess']);
-				
-			}
-			wp_send_json_success($result);
-				
-			die();//bắt buộc phải có khi kết thúc
-		}
-
-		function display_button_quick_buy() {
-			echo do_shortcode('[sw_quickbuy]');
-		}
-
-		// css frontend hook
-		
-	}// end class
-	$objqbw = new swqbwoSWQuickBuyWoo();
-	$objqbw->register();
-
-}
-
-?>
+new SW_Quick_Buy_Woo_Adv();
