@@ -1,0 +1,7 @@
+.qbwsw-settings input[type="text"] {
+    width: 100%;
+    max-width: 500px ;
+}
+.wrap-swqbw .settings-error {
+    display: none !important;
+}
